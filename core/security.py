@@ -164,7 +164,9 @@ OUT_OF_SCOPE_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
             r"(?i)\b(?:weather\s+forecast|stock\s+price|share\s+market|crypto|bitcoin|"
             r"horoscope|astrology|recipe|cook|medication|dosage|diagnose|symptoms|"
             r"visa|passport|flight\s+booking|movie|netflix|cricket\s+score|"
-            r"homework|translate\s+this|write\s+(?:python|java|javascript|c\+\+)\s+code)\b"
+            r"homework|translate\s+this|"
+            r"python|javascript|c\+\+|golang|rust|linked[- ]*list|binary[- ]*tree|leetcode|data\s+structure|programming|"
+            r"(?:write|give\s+me|generate|provide|create)\b[^.\n]{0,25}?\b(?:code|script|program|algorithm|function)\b)\b"
         ),
     ),
     (

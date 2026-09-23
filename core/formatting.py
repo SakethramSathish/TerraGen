@@ -20,15 +20,15 @@ from typing import Any
 
 from core.security import escape_for_display
 
-#: Indicator-level badges. Plain text + emoji only (never raw HTML).
+#: Indicator-level badges. Clean plain-text industrial badges (no emojis, never raw HTML).
 LEVEL_BADGES: dict[str, str] = {
-    "OK": "✅ OK",
-    "INFO": "ℹ️ INFO",
-    "CAUTION": "🟡 CAUTION",
-    "WARNING": "🟠 WARNING",
-    "CRITICAL": "🔴 CRITICAL",
-    "UNKNOWN": "⚪ UNKNOWN",
-    "NO_DATA": "⚪ NO DATA",
+    "OK": "[OK]",
+    "INFO": "[INFO]",
+    "CAUTION": "[CAUTION]",
+    "WARNING": "[WARNING]",
+    "CRITICAL": "[CRITICAL]",
+    "UNKNOWN": "[UNKNOWN]",
+    "NO_DATA": "[NO DATA]",
 }
 
 #: Hex colours used for chart accents / progress bars (kept here so the palette is one file).
@@ -43,8 +43,8 @@ LEVEL_COLORS: dict[str, str] = {
 
 
 def badge(level: str) -> str:
-    """Return the emoji badge for a severity/indicator level (``⚠️`` default)."""
-    return LEVEL_BADGES.get(str(level).upper(), "⚠️ " + str(level).upper())
+    """Return the plain-text badge for a severity/indicator level (no emojis)."""
+    return LEVEL_BADGES.get(str(level).upper(), f"[{str(level).upper()}]")
 
 
 def level_color(level: str) -> str:

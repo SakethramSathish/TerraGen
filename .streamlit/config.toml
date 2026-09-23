@@ -8,11 +8,11 @@
 # =====================================================================================
 
 [theme]
-# Caterpillar-inspired palette: safety yellow accent on a neutral industrial surface.
+base = "dark"
 primaryColor = "#FFCD11"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F5F7"
-textColor = "#1B1B1B"
+backgroundColor = "#0F1116"
+secondaryBackgroundColor = "#1A1D24"
+textColor = "#E6EDF3"
 font = "sans serif"
 
 [browser]
@@ -24,14 +24,11 @@ address = "0.0.0.0"
 port = 8501
 # Telemetry uploads are processed in memory (5 MiB cap) and never persisted by the server.
 maxUploadSize = 5
-# NOTE for a production machine on a shared/plant LAN: tighten cross-origin access by
-# switching to Streamlit's restrictive defaults, e.g.
-#     enableCORS = true
-#     enableXsrfProtection = true
-#     allowedHosts = ["operator-pc.local:8501", "10.0.0.*"]
-# It is left permissive here so the same file also serves the single-operator demo/dev host.
-enableCORS = false
+# Tighten cross-origin and CSRF access for edge/production deployment
+enableCORS = true
+enableXsrfProtection = true
 
 [client]
-showErrorDetails = true
+showErrorDetails = false
 toolbarMode = "minimal"
+

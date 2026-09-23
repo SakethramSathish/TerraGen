@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 TEST_ARTIFACTS = pathlib.Path(tempfile.mkdtemp(prefix="cat-assistant-tests-"))
 os.environ.setdefault("CAT_DB_PATH", str(TEST_ARTIFACTS / "audit.sqlite3"))
+os.environ["CAT_COPILOT_MODE"] = "offline"
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402

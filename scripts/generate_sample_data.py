@@ -41,27 +41,40 @@ def main() -> int:
     parser.add_argument("--machine", default=DEFAULT_MACHINE_ID, help="machine id")
     parser.add_argument("--start", default="2026-09-23T06:00:00", help="window start (ISO-8601)")
     parser.add_argument("--output", type=Path, default=SAMPLE_CSV, help="output path")
+    parser.add_argument("--fleet", action="store_true", default=True, help="generate multi-machine fleet dataset")
     args = parser.parse_args()
 
-    config = telemetry.SimulationConfig(
-        machine_id=args.machine,
-        minutes=float(args.minutes),
-        interval_s=float(args.interval),
-        seed=int(args.seed),
-        start=datetime.fromisoformat(args.start),
-    )
-    frame = telemetry.simulate_telemetry(config)
+    fleet_ids = (
+        ("CAT-320-EXC-014", int(args.seed)),
+        ("CAT-745-ART-002", int(args.seed) + 10),
+        ("CAT-D6-DOZ-008", int(args.seed) + 20),
+        ("CAT-980-WLD-005", int(args.seed) + 30),
+    ) if args.fleet and args.machine == DEFAULT_MACHINE_ID else ((args.machine, int(args.seed)),)
+
+    import pandas as pd
+    frames = []
+    for mid, m_seed in fleet_ids:
+        cfg = telemetry.SimulationConfig(
+            machine_id=mid,
+            minutes=float(args.minutes),
+            interval_s=float(args.interval),
+            seed=m_seed,
+            start=datetime.fromisoformat(args.start),
+        )
+        frames.append(telemetry.simulate_telemetry(cfg))
+
+    combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
 
     # A sample file is *input* data: push it through the production sanitiser and write the
     # sanitised frame, so the shipped CSV is guaranteed ingestible.
-    sanitized = telemetry.sanitize_telemetry_frame(frame).frame
+    sanitized = telemetry.sanitize_telemetry_frame(combined).frame
     telemetry.telemetry_to_csv(sanitized, args.output)
 
     anomalies = telemetry.detect_anomalies(sanitized)
-    print(f"wrote {args.output} ({len(sanitized):,} rows)")
+    print(f"wrote {args.output} ({len(sanitized):,} rows, machines: {list(sanitized['machine_id'].unique())})")
     print(f"  window      : {sanitized['timestamp'].iloc[0]} -> {sanitized['timestamp'].iloc[-1]}")
     print(f"  flagged rows: {int(anomalies['is_anomaly'].sum()):,}")
-    print(f"  digest      : {telemetry.sanitize_telemetry_frame(frame).digest[:32]}")
+    print(f"  digest      : {telemetry.sanitize_telemetry_frame(combined).digest[:32]}")
     return 0
 
 

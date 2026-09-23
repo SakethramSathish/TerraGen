@@ -228,6 +228,8 @@ def app_test():
     # Absolute path: AppTest resolves relative paths against *this* file, not the CWD.
     project_root = Path(__file__).resolve().parent.parent
     instance = testing.AppTest.from_file(str(project_root / "app.py"), default_timeout=300)
+    # The app defaults to Standby (no data). Select the simulator so the integration
+    instance.session_state["data_source"] = "sim"
     instance.run()
     return instance
 

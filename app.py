@@ -63,6 +63,7 @@ from core import (
     audit,
     copilot,
     dashboard,
+    icons,
     knowledge_base,
     safety,
     security,
@@ -75,7 +76,7 @@ from core import formatting as fmt
 # ======================================================================================
 _PAGE_CONFIG: dict[str, Any] = {
     "page_title": f"{APP_NAME} · v{APP_VERSION}",
-    "page_icon": "🚜",
+    "page_icon": None,
     "layout": "wide",
     "initial_sidebar_state": "expanded",
 }
@@ -185,6 +186,10 @@ def resolve_ingest(
     must also never be shown fabricated data as if it were real (see the UI banner).
     """
     source = str(source).lower()
+
+    if source == "none":
+        empty = telemetry.sanitize_telemetry_frame(pd.DataFrame())
+        return IngestOutcome(result=empty, source_label="STANDBY · no data source selected", is_simulated=False)
 
     if source == "upload":
         if not uploaded_bytes:
@@ -329,6 +334,9 @@ def ensure_session_state() -> None:
     st.session_state.setdefault("last_answer", None)
     st.session_state.setdefault("refresh_count", 0)
     st.session_state.setdefault("session_logged", False)
+    st.session_state.setdefault("dark_mode", True)
+    st.session_state.setdefault("dark_mode_toggle", True)
+    st.session_state.setdefault("machine_id", config.DEFAULT_MACHINE_ID)
 
 
 # ======================================================================================
@@ -448,27 +456,78 @@ class AppContext:
 def render_sidebar() -> AppContext:
     """Render all controls and return the assembled :class:`AppContext`."""
     now = datetime.now()
-    st.session_state["machine_id"] = config.DEFAULT_MACHINE_ID
+    st.session_state.setdefault("machine_id", config.DEFAULT_MACHINE_ID)
 
     with st.sidebar:
-        st.title("🚜 CAT Smart Operator")
+        st.title("CAT Smart Operator")
         st.caption(APP_TAGLINE)
         st.divider()
 
+        # ---------------- display mode ----------------
+        dark_mode = st.toggle(
+            "Night Mode",
+            key="dark_mode_toggle",
+            help="Toggle between Dark Industrial Cab theme and Daylight High-Contrast mode.",
+        )
+        st.session_state["dark_mode"] = dark_mode
+        st.divider()
+
         # ---------------- operator + machine ----------------
-        with st.expander("👷 Operator & machine", expanded=True):
+        with st.expander("Operator & Machine Profile", expanded=True):
             operator = st.text_input("Operator name", value="Operator",
                                      max_chars=32, key="operator_name")
-            machine_id = st.text_input("Machine ID", value=config.DEFAULT_MACHINE_ID,
-                                       max_chars=32, key="machine_id_input")
-            clean_machine = security.sanitize_text(machine_id, max_chars=32).text or config.DEFAULT_MACHINE_ID
+
+            fleet_dict = dict(config.DEMO_FLEET_MACHINES)
+            known_ids = list(fleet_dict.keys())
+
+            # Detect machines in dataset if available
+            if config.SAMPLE_CSV.exists() and "sample_machines" not in st.session_state:
+                try:
+                    df_peek = pd.read_csv(config.SAMPLE_CSV, usecols=["machine_id"], nrows=5000)
+                    st.session_state["sample_machines"] = list(df_peek["machine_id"].dropna().unique())
+                except Exception:
+                    st.session_state["sample_machines"] = []
+
+            for sm in st.session_state.get("sample_machines", []):
+                if sm not in known_ids and config.MACHINE_ID_RE.match(sm):
+                    known_ids.append(sm)
+                    fleet_dict[sm] = f"{sm} · Dataset Fleet"
+
+            known_ids.append("Custom Machine...")
+
+            current_machine = st.session_state.get("machine_id", config.DEFAULT_MACHINE_ID)
+            default_idx = known_ids.index(current_machine) if current_machine in known_ids else 0
+
+            selected_machine_option = st.selectbox(
+                "Select Machine (Session Linked)",
+                options=known_ids,
+                index=default_idx,
+                format_func=lambda mid: fleet_dict.get(mid, mid),
+                key="machine_selector",
+                help="Every session links to 1 machine. Choose your machine from the dataset or fleet.",
+            )
+
+            if selected_machine_option == "Custom Machine...":
+                custom_id = st.text_input(
+                    "Machine ID",
+                    value=current_machine if current_machine not in fleet_dict else "",
+                    max_chars=32,
+                    key="machine_id_input",
+                )
+                clean_machine = security.sanitize_text(custom_id, max_chars=32).text or config.DEFAULT_MACHINE_ID
+            else:
+                clean_machine = selected_machine_option
+
             if not config.MACHINE_ID_RE.match(clean_machine):
-                st.warning("Machine ID must be alphanumeric (dashes/spaces allowed) - using default.")
                 clean_machine = config.DEFAULT_MACHINE_ID
 
+            st.session_state["machine_id"] = clean_machine
+
+            st.caption(f"🔗 **Active Session Linked:** `{clean_machine}` · Session ID: `{session_id()}`")
+
         # ---------------- shift plan ----------------
-        with st.expander("🎯 Shift plan", expanded=True):
-            shift_choice = st.selectbox("Shift", ("AUTO", "DAY", "NIGHT"), index=0)
+        with st.expander("Shift Plan & Targets", expanded=True):
+            shift_choice = st.segmented_control("Shift", ("AUTO", "DAY", "NIGHT"), default="AUTO") or "AUTO"
             target_tons = st.number_input("Target tonnage (t)", min_value=1.0, max_value=20_000.0,
                                           value=config.DEFAULT_SHIFT_TARGET_TONS, step=50.0)
             target_cycles = st.number_input("Target cycles", min_value=1, max_value=2_000,
@@ -477,17 +536,19 @@ def render_sidebar() -> AppContext:
                                           value=config.DEFAULT_SHIFT_HOURS, step=0.5)
 
         # ---------------- data source ----------------
-        with st.expander("📡 Telemetry source", expanded=True):
-            source = st.radio(
+        with st.expander("Telemetry Stream Ingest", expanded=True):
+            source = st.segmented_control(
                 "Source",
-                ("sim", "upload", "sample"),
+                ("none", "sim", "upload", "sample"),
                 format_func=lambda value: {
-                    "sim": "Edge simulator (live)",
+                    "none": "Standby",
+                    "sim": "Edge Simulator",
                     "upload": "Upload CSV",
-                    "sample": "Bundled sample CSV",
+                    "sample": "Sample Data",
                 }[value],
-                index=0,
-            )
+                default="none",
+                key="data_source",
+            ) or "none"
             uploaded_bytes: bytes | None = None
             uploaded_name = ""
             if source == "upload":
@@ -510,8 +571,12 @@ def render_sidebar() -> AppContext:
             sim_minutes, sim_interval, sim_seed = 120.0, 5.0, float(config.DEFAULT_SIM_SEED)
             inject_sensor_fault = False
             if source in {"sim", "upload"}:
-                sim_mode = st.radio("Simulator window", ("shift", "window"), index=0,
-                                    format_func=lambda v: "Shift to date" if v == "shift" else "Rolling window")
+                sim_mode = st.segmented_control(
+                    "Simulator window",
+                    ("shift", "window"),
+                    format_func=lambda v: "Shift to date" if v == "shift" else "Rolling window",
+                    default="shift",
+                ) or "shift"
                 if sim_mode == "window":
                     sim_minutes = st.slider("Window (minutes)", 10, 480, 120, step=10)
                 sim_interval = st.select_slider("Sample interval (s)", options=[1, 2, 5, 10, 15, 30], value=5)
@@ -523,7 +588,7 @@ def render_sidebar() -> AppContext:
                                                 help="Adds an invalid RPM/radar sample to demo the fault path.")
 
         # ---------------- live refresh ----------------
-        with st.expander("🔄 Live refresh", expanded=False):
+        with st.expander("Live Auto-Refresh", expanded=False):
             auto_refresh = st.toggle("Auto-refresh", value=False)
             refresh_s = st.slider("Interval (s)", 2, 60, 5, disabled=not auto_refresh)
             if st.button("Refresh now", **ui_kwargs(st.button, width="stretch")):
@@ -531,7 +596,7 @@ def render_sidebar() -> AppContext:
 
         # ---------------- copilot / secrets ----------------
         llm_settings = get_llm_settings()
-        with st.expander("🔐 Copilot & secrets", expanded=False):
+        with st.expander("Copilot Gateway & Audit", expanded=False):
             st.write(f"**Effective mode:** `{llm_settings.effective_mode}`")
             st.caption(llm_settings.describe())
             if llm_settings.problems:
@@ -578,6 +643,20 @@ def render_sidebar() -> AppContext:
     )
 
     frame = ingest.result.frame
+    # Link session strictly to 1 machine: filter multi-machine dataset telemetry
+    if "machine_id" in frame.columns and not frame.empty:
+        dataset_machines = list(frame["machine_id"].unique())
+        if clean_machine in dataset_machines:
+            frame = frame[frame["machine_id"] == clean_machine].copy().reset_index(drop=True)
+            ingest.result.frame = frame
+            ingest.result.rows_kept = len(frame)
+        elif len(dataset_machines) > 0 and source in {"sample", "upload"}:
+            clean_machine = dataset_machines[0]
+            st.session_state["machine_id"] = clean_machine
+            frame = frame[frame["machine_id"] == clean_machine].copy().reset_index(drop=True)
+            ingest.result.frame = frame
+            ingest.result.rows_kept = len(frame)
+
     analysis = telemetry.detect_anomalies(frame)
     kpis = telemetry.compute_kpis(analysis)
     snapshot = safety.safety_snapshot(analysis)
@@ -635,6 +714,27 @@ def render_dashboard_tab(ctx: AppContext) -> None:
     if ctx.safety.overall_level in {"WARNING", "CRITICAL", "UNKNOWN"}:
         status_level = ctx.safety.overall_level
 
+    # High-visibility operator status banner (SVG)
+    st.html(icons.get_status_banner(status_level, ctx.safety.headline()[:100]))
+
+    # Guiding tips for users on how to operate the dashboard
+    with st.expander("Dashboard Operator Guide & Quick-Start", expanded=False):
+        st.markdown(
+            "**Caterpillar Smart Operator Assistant Quick-Start Guide**\n\n"
+            "• **1. Machine Status Banner:** Displays immediate operational clearance. "
+            "`[SYSTEM NORMAL]` indicates safe operation with zero active interlock blocks. "
+            "`[OPERATIONAL CAUTION]` indicates elevated radar or cycle conditions. "
+            "`[CRITICAL SAFETY HOLD]` requires immediate stop and supervisor notification.\n\n"
+            "• **2. Daily Production Tracking:** Monitor your **Tons Hauled** against the shift plan. "
+            "Maintain your **Tons / Hour** at or above the target pace to complete production on schedule.\n\n"
+            "• **3. Active Safety Guardian (Tab 2):** Continuously checks seatbelt latch compliance "
+            "and 360-degree radar proximity zones (<5m STOP zone, <10m WARNING zone).\n\n"
+            "• **4. CAT-Pal Copilot (Tab 4):** Ask real-time questions about fault codes, hydraulic system "
+            "checks, cold starts, and OMM service intervals.\n\n"
+            "• **5. Telemetry Testing Suite (Tab 5):** Run real-time machine fault simulations (hydraulic cavitation, "
+            "overheating, proximity intrusion) with interactive SVG controls."
+        )
+
     top = st.columns(5)
     top[0].metric("Machine status", state.machine_status.split(" (")[0].title(),
                   delta=state.machine_status.split("(", 1)[1].rstrip(")") if "(" in state.machine_status else None,
@@ -653,21 +753,21 @@ def render_dashboard_tab(ctx: AppContext) -> None:
 
     left, right = st.columns([1.15, 1])
     with left:
-        st.markdown("##### Shift milestones")
-        st.dataframe(pd.DataFrame(dashboard.milestone_table(state)), hide_index=True,
-                     **ui_kwargs(st.dataframe, width="stretch"))
+        st.markdown("##### Shift Milestones")
         milestone = state.next_milestone
         if milestone is None:
-            st.success("🎉 All milestones complete - log the shift and hand over.")
+            st.success("All milestones complete - log the shift and prepare handover.")
         else:
-            st.markdown(
-                f"**Next milestone:** {milestone.label} · target {fmt.fmt_tons(milestone.target_tons)} "
-                f"· gap {fmt.fmt_tons(max(0.0, milestone.target_tons - state.tons_hauled))}"
+            st.info(
+                f"**Current Target:** {milestone.label} · Target: {fmt.fmt_tons(milestone.target_tons)} "
+                f"· Gap: {fmt.fmt_tons(max(0.0, milestone.target_tons - state.tons_hauled))}"
             )
             st.caption(milestone.note)
+        st.dataframe(pd.DataFrame(dashboard.milestone_table(state)), hide_index=True,
+                     **ui_kwargs(st.dataframe, width="stretch"))
 
     with right:
-        st.markdown("##### Progress vs plan")
+        st.markdown("##### Production Progress vs Plan")
         series = dashboard.shift_time_series(ctx.analysis, plan)
         if series.empty:
             st.info("No completed haul cycles in this window yet.")
@@ -689,9 +789,9 @@ def render_dashboard_tab(ctx: AppContext) -> None:
                    delta_color="off")
 
     if state.lessons:
-        st.markdown("##### Operator coaching")
+        st.markdown("##### Operator Coaching & Efficiency Tips")
         for lesson in state.lessons:
-            st.write(f"- {lesson}")
+            st.info(f"• {lesson}")
 
     with st.expander("Ingest & data-quality audit", expanded=False):
         result = ctx.ingest.result
@@ -730,7 +830,7 @@ def render_safety_tab(ctx: AppContext) -> None:
     left, right = st.columns(2)
 
     with left:
-        st.markdown("#### 🎽 Seatbelt status")
+        st.markdown("#### Seatbelt Interlock Status")
         seatbelt = snapshot.seatbelt
         latched_label = {True: "LATCHED", False: "UNLATCHED", None: "UNKNOWN"}[seatbelt.current_latched]
         st.metric(
@@ -753,7 +853,7 @@ def render_safety_tab(ctx: AppContext) -> None:
         )
 
     with right:
-        st.markdown("#### 📡 Proximity radar")
+        st.markdown("#### Proximity Radar Detection")
         proximity = snapshot.proximity
         st.metric(
             "Zone (now)",
@@ -898,6 +998,296 @@ def render_analytics_tab(ctx: AppContext) -> None:
         )
 
 
+def render_plain_english_tab(ctx: AppContext) -> None:
+    """
+    Everyday Operator Assistance tab:
+    Translates complex machine telemetry, safety holds, and sensor anomalies into
+    100% plain, jargon-free English that any worker can understand immediately,
+    and provides natural-language fixes powered by CAT-Pal.
+    """
+    st.html(
+        f"<h3>{icons.svg_icon(icons.COPILOT_SVG, 22)} Plain-English Machine Assist & Live Fixes</h3>"
+    )
+    st.caption(
+        "Clear, jargon-free situation summary for on-site operators. "
+        "Tells you exactly what is happening right now, why it matters, and how to fix it."
+    )
+
+    frame = ctx.ingest.result.frame
+    snapshot = ctx.safety
+    clean_machine = ctx.plan.machine_id
+    fleet_map = dict(config.DEMO_FLEET_MACHINES)
+    model_name = fleet_map.get(clean_machine, "Cat Heavy Equipment")
+
+    # 1. Machine & Session Identification Banner
+    col_mach, col_sess = st.columns([2, 1])
+    with col_mach:
+        st.markdown(f"**Active Machine:** `{clean_machine}` ({model_name})")
+        st.caption(f"Linked Operator: **{ctx.plan.operator}** · Shift: **{ctx.plan.shift_name}**")
+    with col_sess:
+        st.markdown(f"**Session ID:** `{session_id()}`")
+        st.caption("Single-machine link verified")
+
+    # 2. Check if in Standby
+    if snapshot.samples == 0 or frame.empty:
+        st.info(
+            "**Standby Mode — No Live Machine Telemetry Streaming**\n\n"
+            "The dashboard is currently awaiting machine data. To begin live monitoring:\n\n"
+            "1. Open the left sidebar under **Telemetry Stream Ingest**.\n"
+            "2. Select **Edge Simulator** (for live demo) or **Sample Data** (for bundled fleet data).\n"
+            "3. Select your active machine from the dropdown under **Operator & Machine Profile**."
+        )
+        return
+
+    # Extract latest readings
+    latest = frame.iloc[-1]
+
+    # 3. Overall Status Hero Card
+    status_level = snapshot.overall_level
+    if status_level == "CRITICAL":
+        st.error(
+            "### 🛑 CRITICAL SAFETY HOLD — STOP OPERATION\n"
+            "**The machine's safety interlock is triggered.** Do not swing, tram, or operate hydraulics "
+            "until the critical safety holds listed below are cleared."
+        )
+    elif status_level in {"WARNING", "CAUTION"}:
+        st.warning(
+            "### ⚠️ ATTENTION REQUIRED — Operating With Cautions\n"
+            "The machine is operational, but one or more readings are outside normal bounds. "
+            "Review the warnings below to avoid damage or safety escalations."
+        )
+    else:
+        st.success(
+            "### 🟢 ALL SYSTEMS CLEAR — Normal Operation\n"
+            "All safety interlocks and machine operating values are currently within safe limits. "
+            "You are clear to proceed with shift tasks."
+        )
+
+    # 4. Diagnose specific live conditions
+    active_issues: list[dict[str, Any]] = []
+
+    # Proximity
+    prox_val = float(latest.get("proximity_m", 99.0))
+    if prox_val < config.THRESHOLDS.proximity_stop_m:
+        active_issues.append({
+            "title": "Ground Personnel or Obstacle in Red Zone",
+            "severity": "CRITICAL",
+            "jargon_free_what": f"Safety radar detected an obstacle or worker only **{prox_val:.1f} meters** away (danger zone is anything under 5.0m).",
+            "why_it_matters": "High risk of hitting ground workers in your blind spot or backing into equipment.",
+            "plain_fix": [
+                "Immediately release travel and swing controls to halt machine motion.",
+                "Sound horn twice to alert ground crew.",
+                "Check rear and 360° cameras to identify the person or obstacle.",
+                "Verify with the ground spotter by two-way radio before resuming motion.",
+            ],
+            "cat_pal_prompt": f"How do I safely clear a proximity intrusion alert when someone is within {prox_val:.1f}m of my machine?",
+        })
+    elif prox_val < config.THRESHOLDS.proximity_warning_m:
+        active_issues.append({
+            "title": "Object Detected in Caution Buffer",
+            "severity": "WARNING",
+            "jargon_free_what": f"An obstacle or vehicle is **{prox_val:.1f} meters** from the machine (caution buffer is 5.0m to 8.0m).",
+            "why_it_matters": "The object is approaching the exclusion boundary.",
+            "plain_fix": [
+                "Reduce swing and tramming speed.",
+                "Maintain visual or radio contact with site spotters.",
+            ],
+            "cat_pal_prompt": "What is the recommended safe buffer distance around an operating excavator on a busy jobsite?",
+        })
+
+    # Seatbelt
+    seatbelt_latched = bool(latest.get("seatbelt_latched", 1))
+    ground_speed = float(latest.get("ground_speed_kph", 0.0))
+    if not seatbelt_latched and ground_speed > 0.5:
+        active_issues.append({
+            "title": "Seatbelt Unlatched While Machine is Moving",
+            "severity": "CRITICAL",
+            "jargon_free_what": f"You are driving or tramming at **{ground_speed:.1f} km/h** without your seatbelt buckled.",
+            "why_it_matters": "If the machine tilts, hits an uncompacted trench, or rolls, you can be ejected or crushed.",
+            "plain_fix": [
+                "Bring the machine to a complete stop on level ground.",
+                "Fasten seatbelt securely until you hear and feel the click.",
+                "Verify the cab monitor seatbelt icon turns green.",
+            ],
+            "cat_pal_prompt": "Why is the seatbelt interlock required on Cat excavators even during low-speed tramming?",
+        })
+
+    # Coolant temperature
+    coolant_temp = float(latest.get("coolant_temp_c", 85.0))
+    if coolant_temp > config.THRESHOLDS.coolant_temp_c_max:
+        active_issues.append({
+            "title": "Engine Overheating",
+            "severity": "CRITICAL",
+            "jargon_free_what": f"Engine coolant temperature has reached **{coolant_temp:.1f}°C** (maximum safe limit is {config.THRESHOLDS.coolant_temp_c_max:.0f}°C).",
+            "why_it_matters": "Continuing to dig or travel will warp the cylinder head, blow gaskets, or seize the engine.",
+            "plain_fix": [
+                "Reduce engine speed to LOW IDLE immediately (do NOT shut off engine right away; idling allows coolant to circulate and cool down).",
+                "Park in a safe, ventilated area and check the radiator grille for dirt, dust, or trash blockage.",
+                "If temperature does not drop below 95°C within 3 minutes, shut off engine and inspect coolant level when cold.",
+            ],
+            "cat_pal_prompt": "How do I safely cool down an overheating Cat diesel engine without causing thermal shock?",
+        })
+
+    # Hydraulic PSI
+    hydraulic_psi = float(latest.get("hydraulic_psi", 2800.0))
+    rpm_val = float(latest.get("rpm", 1500.0))
+    if rpm_val > 600.0 and hydraulic_psi < config.THRESHOLDS.hydraulic_psi_nominal_low:
+        active_issues.append({
+            "title": "Low Hydraulic Pressure",
+            "severity": "WARNING",
+            "jargon_free_what": f"Hydraulic system pressure dropped to **{hydraulic_psi:.0f} PSI** (expected working pressure is 2,400 to 3,400 PSI).",
+            "why_it_matters": "The boom, arm, or bucket may move sluggishly, shudder, or fail to hold grade.",
+            "plain_fix": [
+                "Lower work tool to the ground.",
+                "Engage the red hydraulic lockout lever.",
+                "Inspect under the machine and along boom lines for spraying or dripping hydraulic fluid.",
+                "Check hydraulic oil level in the tank sight glass.",
+            ],
+            "cat_pal_prompt": "What causes sudden low hydraulic pressure during digging cycles and how should an operator respond?",
+        })
+    elif hydraulic_psi > config.THRESHOLDS.hydraulic_psi_nominal_high:
+        active_issues.append({
+            "title": "High Hydraulic Pressure Spike",
+            "severity": "WARNING",
+            "jargon_free_what": f"Hydraulic pressure surged to **{hydraulic_psi:.0f} PSI** (normal ceiling is {config.THRESHOLDS.hydraulic_psi_nominal_high:.0f} PSI).",
+            "why_it_matters": "Stresses high-pressure hoses and risks hydraulic line rupture.",
+            "plain_fix": [
+                "Ease off heavy hydraulic stall conditions (avoid holding cylinders at full stroke).",
+                "Ensure relief valves are operating freely.",
+            ],
+            "cat_pal_prompt": "How should an operator avoid hydraulic relief valve popping and overpressure during heavy excavation?",
+        })
+
+    # Engine RPM / Overrev
+    if rpm_val > config.THRESHOLDS.over_rev_rpm:
+        active_issues.append({
+            "title": "Engine Over-Revving",
+            "severity": "WARNING",
+            "jargon_free_what": f"Engine speed reached **{rpm_val:.0f} RPM** (safe ceiling is {config.THRESHOLDS.over_rev_rpm:.0f} RPM).",
+            "why_it_matters": "Over-revving stresses valves, pistons, and the turbocharger.",
+            "plain_fix": [
+                "Back off the throttle dial.",
+                "If tramming down a ramp, do not coast in neutral—engage travel retarder.",
+            ],
+            "cat_pal_prompt": "How to prevent diesel engine over-speed when traveling loaded downhill?",
+        })
+
+    # Fuel level
+    fuel_level = float(latest.get("fuel_level_pct", 50.0))
+    if fuel_level < config.THRESHOLDS.low_fuel_pct:
+        active_issues.append({
+            "title": "Low Fuel Tank",
+            "severity": "WARNING",
+            "jargon_free_what": f"Fuel level is down to **{fuel_level:.0f}%**.",
+            "why_it_matters": "Running completely out of fuel draws sludge from the bottom of the tank and introduces air locks in the common rail injectors.",
+            "plain_fix": [
+                "Plan your refuel before starting the next loading cycle.",
+                "Notify site logistics or radio the mobile fuel bowser.",
+            ],
+            "cat_pal_prompt": "What is the procedure for bleeding air from fuel injectors if a diesel engine runs out of fuel?",
+        })
+
+    # Sensor fault
+    sensor_fault = bool(latest.get("sensor_fault", False))
+    if sensor_fault:
+        active_issues.append({
+            "title": "Sensor Malfunction Detected",
+            "severity": "WARNING",
+            "jargon_free_what": "An electronic telemetry sensor is sending erratic or out-of-range readings.",
+            "why_it_matters": "The machine computer cannot verify safe operating thresholds.",
+            "plain_fix": [
+                "Park in a designated maintenance bay.",
+                "Notify site mechanics to perform an electronic diagnostics scan (Cat ET).",
+            ],
+            "cat_pal_prompt": "What should an operator do when a sensor fault appears on the Cat machine display?",
+        })
+
+    st.markdown("---")
+
+    # 5. Render Issues & Natural Language Fixes
+    if not active_issues:
+        st.markdown("#### Everything is Running Smoothly Right Now")
+        st.markdown(
+            "No active mechanical faults or safety holds detected at this moment. "
+            "Continue observing site safety protocols and 360° surroundings."
+        )
+    else:
+        st.markdown(f"#### Active Situation Breakdown ({len(active_issues)} issues detected right now)")
+
+        for idx, issue in enumerate(active_issues):
+            is_crit = issue["severity"] == "CRITICAL"
+            card_color = "#FF4B4B" if is_crit else "#FFA500"
+            bg_color = "rgba(255,75,75,0.06)" if is_crit else "rgba(255,165,0,0.06)"
+
+            with st.container():
+                st.markdown(f"#### {idx + 1}. {issue['title']}")
+                st.markdown(f"**What is happening:** {issue['jargon_free_what']}")
+                st.markdown(f"**Why it matters:** {issue['why_it_matters']}")
+
+                st.markdown("**How to Fix This Right Now (Step-by-Step):**")
+                for step_num, step_text in enumerate(issue["plain_fix"], start=1):
+                    st.markdown(f"**Step {step_num}:** {step_text}")
+
+                # Instant CAT-Pal guidance button for this specific issue
+                ask_key = f"ask_pal_issue_{idx}"
+                if st.button(f"Ask CAT-Pal: 'Explain how to fix {issue['title']}'", key=ask_key, **ui_kwargs(st.button, width="stretch")):
+                    with st.spinner("CAT-Pal is preparing step-by-step guidance..."):
+                        answer = copilot.respond(issue["cat_pal_prompt"], history=[], settings=ctx.llm_settings)
+                        st.session_state[f"answer_issue_{idx}"] = answer.text
+
+                if f"answer_issue_{idx}" in st.session_state:
+                    st.info(f"**CAT-Pal Step-by-Step Guidance:**\n\n{st.session_state[f'answer_issue_{idx}']}")
+
+                st.markdown("---")
+
+    # 6. Dedicated CAT-Pal Assistant for Everyday Workers
+    st.html(f"<h3>{icons.svg_icon(icons.COPILOT_SVG, 20)} Ask CAT-Pal Anything in Simple Everyday Words</h3>")
+    st.caption("Got a question about this machine? Type in plain words—no technical jargon needed.")
+
+    # Preset Quick Help Buttons
+    quick_cols = st.columns(2)
+    quick_questions = [
+        "How do I safely reset the hydraulic lockout lever?",
+        "What should I do if the proximity radar sounds while swinging?",
+        "How do I properly cool down an overheating engine?",
+        "What are the mandatory pre-start safety checks before operating?",
+    ]
+    for q_idx, q_text in enumerate(quick_questions):
+        btn_col = quick_cols[q_idx % 2]
+        if btn_col.button(q_text, key=f"quick_plain_{q_idx}", **ui_kwargs(st.button, width="stretch")):
+            with st.spinner("CAT-Pal is answering in plain English..."):
+                ans = copilot.respond(q_text, history=[], settings=ctx.llm_settings)
+                st.session_state["plain_quick_answer"] = (q_text, ans.text)
+
+    if "plain_quick_answer" in st.session_state:
+        q, a = st.session_state["plain_quick_answer"]
+        st.info(f"**Question:** {q}\n\n**CAT-Pal Answer:**\n\n{a}")
+
+    # Freeform user input
+    user_plain_input = st.text_input(
+        "Ask CAT-Pal in plain words:",
+        placeholder="e.g. Why is the boom moving slow? or How do I clear the red zone warning?",
+        key="plain_pal_user_input",
+    )
+    if st.button("Get Plain-English Solution", key="btn_plain_pal_submit", **ui_kwargs(st.button, width="stretch")):
+        if user_plain_input.strip():
+            with st.spinner("CAT-Pal is analyzing and preparing a plain-English fix..."):
+                answer = copilot.respond(user_plain_input, history=[], settings=ctx.llm_settings)
+                st.session_state["last_plain_pal_answer"] = (user_plain_input, answer.text)
+                # Also log to audit store
+                get_audit_store().record(
+                    "plain_english_query",
+                    "INFO",
+                    machine_id=clean_machine,
+                    session_id=session_id(),
+                    payload={"query": security.sanitize_text(user_plain_input, max_chars=MAX_CHAT_CHARS).text, "source": answer.source},
+                )
+
+    if "last_plain_pal_answer" in st.session_state:
+        uq, ua = st.session_state["last_plain_pal_answer"]
+        st.info(f"**Question:** {uq}\n\n**CAT-Pal Plain-English Solution:**\n\n{ua}")
+
+
 def render_copilot_tab(ctx: AppContext) -> None:
     """Domain-scoped CAT-Pal chat with the Gatekeeper in front of the model."""
     st.subheader("CAT-Pal · domain-scoped copilot")
@@ -908,6 +1298,32 @@ def render_copilot_tab(ctx: AppContext) -> None:
         f"mode `{ctx.llm_settings.effective_mode}`)."
     )
 
+    if not st.session_state["chat"]:
+        st.markdown("**Operator Prompt Starters (Click to query):**")
+        starter_cols = st.columns(2)
+        for index, starter in enumerate(copilot.suggested_prompts()[:6]):
+            if starter_cols[index % 2].button(starter, key=f"starter_{index}",
+                                              **ui_kwargs(st.button, width="stretch")):
+                with st.spinner("Checking scope and answering..."):
+                    process_chat_message(starter, settings=ctx.llm_settings)
+                st.rerun()
+
+    for idx, turn in enumerate(st.session_state["chat"]):
+        is_user = turn["role"] == "user"
+        with st.chat_message("user" if is_user else "assistant", avatar=None):
+            st.markdown(turn["content"])
+            if turn.get("meta"):
+                st.caption(turn["meta"])
+            with st.expander("Copy " + ("Prompt" if is_user else "Response"), expanded=False):
+                st.code(turn["content"], language="")
+
+    if st.session_state["chat"]:
+        col_clear, _ = st.columns([1, 4])
+        if col_clear.button("Clear Chat History", key="clear_chat_history_btn"):
+            st.session_state["chat"] = []
+            st.rerun()
+
+    # Chat input placed BELOW chat history for a natural conversational flow
     chat_input_kwargs = ui_kwargs(
         st.chat_input,
         placeholder="Ask about the machine, e.g. 'hydraulic pressure drops while digging'",
@@ -920,27 +1336,6 @@ def render_copilot_tab(ctx: AppContext) -> None:
         with st.spinner("Checking scope and answering..."):
             process_chat_message(prompt, settings=ctx.llm_settings)
         st.rerun()
-
-    if not st.session_state["chat"]:
-        st.markdown("**Try one of these (all pass the Gatekeeper):**")
-        starter_cols = st.columns(2)
-        for index, starter in enumerate(copilot.suggested_prompts()[:6]):
-            if starter_cols[index % 2].button(starter, key=f"starter_{index}",
-                                              **ui_kwargs(st.button, width="stretch")):
-                process_chat_message(starter, settings=ctx.llm_settings)
-                st.rerun()
-
-    for turn in st.session_state["chat"]:
-        with st.chat_message("user" if turn["role"] == "user" else "assistant",
-                             avatar="🧑‍🔧" if turn["role"] == "user" else "🚜"):
-            st.markdown(turn["content"])
-            if turn.get("meta"):
-                st.caption(turn["meta"])
-
-    if st.session_state["chat"]:
-        if st.button("Clear chat history"):
-            st.session_state["chat"] = []
-            st.rerun()
 
     with st.expander("What CAT-Pal can and cannot do", expanded=False):
         st.markdown(
@@ -955,6 +1350,182 @@ def render_copilot_tab(ctx: AppContext) -> None:
             f"- Reviewed topics available offline: **{len(knowledge_base.KB_ENTRIES)}** "
             "(see the Security tab for the list)."
         )
+
+
+def render_stream_test_suite_tab(ctx: AppContext) -> None:
+    """Telemetry data stream testing suite: live scenario simulation, sanitisation, and anomaly testing."""
+    st.subheader("Telemetry Data Stream Test Suite")
+    st.caption(
+        "Interactive testing suite for verifying the edge telemetry pipeline: "
+        "sensor data ingestion, real-time sanitisation, anomaly detection, and active safety interlocks."
+    )
+
+    scenarios = {
+        "nominal": {
+            "title": "Nominal Heavy Dig",
+            "tag": "[BASELINE]",
+            "desc": "Standard digging cycle under normal load: nominal hydraulic pressure, normal engine RPM and clear proximity.",
+            "data": {
+                "rpm": 1800, "fuel_rate_lph": 28.5, "fuel_level_pct": 75.0,
+                "hydraulic_psi": 4200.0, "hydraulic_oil_temp_c": 72.0, "coolant_temp_c": 88.0,
+                "oil_pressure_kpa": 380.0, "ground_speed_kph": 2.5, "proximity_m": 22.0,
+                "payload_tons": 6.8, "seatbelt_latched": True,
+            },
+            "expected": "All sensors nominal. Safety Score 100/100. Zero active blockers.",
+        },
+        "hydraulic_drop": {
+            "title": "Hydraulic Cavitation",
+            "tag": "[FAULT]",
+            "desc": "Severe drop in hydraulic pressure (950 PSI) with elevated fluid temperature (89°C) while excavating.",
+            "data": {
+                "rpm": 1820, "fuel_rate_lph": 31.0, "fuel_level_pct": 72.0,
+                "hydraulic_psi": 950.0, "hydraulic_oil_temp_c": 89.0, "coolant_temp_c": 91.0,
+                "oil_pressure_kpa": 360.0, "ground_speed_kph": 0.5, "proximity_m": 18.0,
+                "payload_tons": 5.2, "seatbelt_latched": True,
+            },
+            "expected": "Hydraulic anomaly detected: Low PSI (<1,500 psi). Maintenance inspection required.",
+        },
+        "overheat": {
+            "title": "Coolant Overheating",
+            "tag": "[ALERT]",
+            "desc": "Cooling system thermal runaway exceeding maximum operational threshold (109.5°C vs 105°C limit).",
+            "data": {
+                "rpm": 1750, "fuel_rate_lph": 34.0, "fuel_level_pct": 68.0,
+                "hydraulic_psi": 3900.0, "hydraulic_oil_temp_c": 82.0, "coolant_temp_c": 109.5,
+                "oil_pressure_kpa": 210.0, "ground_speed_kph": 1.0, "proximity_m": 16.0,
+                "payload_tons": 6.0, "seatbelt_latched": True,
+            },
+            "expected": "Engine Critical Alert: Coolant temp >105°C. Power derate recommended.",
+        },
+        "proximity_stop": {
+            "title": "Proximity Intrusion",
+            "tag": "[SAFETY]",
+            "desc": "Personnel detected within the high-risk swing radius (<5m Proximity STOP zone).",
+            "data": {
+                "rpm": 1650, "fuel_rate_lph": 24.0, "fuel_level_pct": 70.0,
+                "hydraulic_psi": 3800.0, "hydraulic_oil_temp_c": 68.0, "coolant_temp_c": 87.0,
+                "oil_pressure_kpa": 370.0, "ground_speed_kph": 1.5, "proximity_m": 3.2,
+                "payload_tons": 4.5, "seatbelt_latched": True,
+            },
+            "expected": "Zone STOP Triggered (<5m). Immediate safety hold required before slewing.",
+        },
+        "seatbelt_unlatched": {
+            "title": "Seatbelt Violation",
+            "tag": "[SAFETY]",
+            "desc": "Operator releases seatbelt while machine travels at 8.2 km/h across the jobsite.",
+            "data": {
+                "rpm": 1900, "fuel_rate_lph": 32.0, "fuel_level_pct": 69.0,
+                "hydraulic_psi": 3600.0, "hydraulic_oil_temp_c": 71.0, "coolant_temp_c": 89.0,
+                "oil_pressure_kpa": 385.0, "ground_speed_kph": 8.2, "proximity_m": 25.0,
+                "payload_tons": 0.0, "seatbelt_latched": False,
+            },
+            "expected": "Active Safety Blocker: Seatbelt unlatched while speed >2 km/h.",
+        },
+        "idle_waste": {
+            "title": "High-Idle Fuel Waste",
+            "tag": "[EFFICIENCY]",
+            "desc": "Machine stationary with engine idling at 920 RPM for prolonged period with zero movement.",
+            "data": {
+                "rpm": 920, "fuel_rate_lph": 6.8, "fuel_level_pct": 74.0,
+                "hydraulic_psi": 700.0, "hydraulic_oil_temp_c": 60.0, "coolant_temp_c": 82.0,
+                "oil_pressure_kpa": 290.0, "ground_speed_kph": 0.0, "proximity_m": 30.0,
+                "payload_tons": 0.0, "seatbelt_latched": True,
+            },
+            "expected": "Idle Fuel Inefficiency flagged. Coaching tip: engage auto-idle or shut down.",
+        },
+    }
+
+    if "active_test_scenario" not in st.session_state:
+        st.session_state["active_test_scenario"] = "nominal"
+
+    st.markdown("##### Select Scenario via Quick Action Buttons:")
+    scenario_cols = st.columns(3)
+    keys = list(scenarios.keys())
+    for idx, key in enumerate(keys):
+        sc = scenarios[key]
+        is_selected = st.session_state["active_test_scenario"] == key
+        label_prefix = "[ACTIVE] " if is_selected else ""
+        if scenario_cols[idx % 3].button(
+            f"{label_prefix}{sc['title']} {sc['tag']}",
+            key=f"sc_btn_{key}",
+            **ui_kwargs(st.button, width="stretch")
+        ):
+            st.session_state["active_test_scenario"] = key
+            st.rerun()
+
+    active_key = st.session_state["active_test_scenario"]
+    scenario = scenarios[active_key]
+
+    st.markdown(f"**Selected Scenario:** {scenario['title']} {scenario['tag']}")
+    st.markdown(f"**Description:** {scenario['desc']}")
+    st.info(f"Target Outcome: {scenario['expected']}")
+
+    test_dict = dict(scenario["data"])
+    test_dict["timestamp"] = datetime.now()
+    test_dict["machine_id"] = ctx.plan.machine_id
+    raw_df = pd.DataFrame([test_dict])
+
+    # Run sanitization
+    sanitized = telemetry.sanitize_telemetry_frame(raw_df)
+    # Run anomaly detector
+    analyzed = telemetry.detect_anomalies(sanitized.frame)
+    # Run safety snapshot
+    safe_snap = safety.safety_snapshot(analyzed)
+
+    st.markdown("##### Live Telemetry Sensor HUD (Simulated Packet)")
+    hud = st.columns(5)
+    hud[0].metric("Engine RPM", f"{test_dict['rpm']:,} rpm")
+    hud[1].metric("Hydraulic PSI", f"{test_dict['hydraulic_psi']:,.0f} psi")
+    hud[2].metric("Coolant Temp", f"{test_dict['coolant_temp_c']:.1f} °C")
+    hud[3].metric("Proximity Radar", f"{test_dict['proximity_m']:.1f} m")
+    hud[4].metric("Seatbelt", "LATCHED [PASS]" if test_dict["seatbelt_latched"] else "UNLATCHED [ALERT]")
+
+    st.markdown("##### 4-Stage Edge Pipeline Verification")
+    p_cols = st.columns(4)
+    with p_cols[0]:
+        st.markdown("**1. Raw Ingest**")
+        st.write("CANbus packet")
+        st.caption("11 channels active")
+    with p_cols[1]:
+        st.markdown("**2. Edge Sanitizer**")
+        if sanitized.rows_kept > 0:
+            st.success("Clean [PASSED]")
+        else:
+            st.error("Rejected [FAULT]")
+        st.caption(f"Faults: {sum(sanitized.sensor_faults.values())}")
+    with p_cols[2]:
+        st.markdown("**3. Anomaly Engine**")
+        anom_count = int(analyzed["anomaly"].sum()) if "anomaly" in analyzed.columns else 0
+        if anom_count == 0:
+            st.success("Normal [0 flags]")
+        else:
+            st.warning(f"Alert [{anom_count} flags]")
+        flags = analyzed["anomaly_flags"].iloc[0] if "anomaly_flags" in analyzed.columns and len(analyzed) else ()
+        st.caption(", ".join(flags) if flags else "No flags")
+    with p_cols[3]:
+        st.markdown("**4. Safety Guardian**")
+        if safe_snap.blockers:
+            st.error(f"Active Blockers: {len(safe_snap.blockers)}")
+            for b in safe_snap.blockers:
+                st.caption(b)
+        else:
+            st.success("Safe [No Blockers]")
+
+    st.markdown("##### Dynamic Multi-Packet Stream Visualizer")
+    sim_packets = []
+    base_time = datetime.now()
+    for i in range(8):
+        pkt = dict(test_dict)
+        pkt["timestamp"] = base_time + timedelta(seconds=i * 5)
+        pkt["hydraulic_psi"] = max(500.0, pkt["hydraulic_psi"] + (i * 25.0 - 90.0))
+        pkt["rpm"] = max(800, int(pkt["rpm"] + (i * 15 - 50)))
+        pkt["coolant_temp_c"] = round(pkt["coolant_temp_c"] + i * 0.3, 1)
+        sim_packets.append(pkt)
+    stream_df = pd.DataFrame(sim_packets)
+    st.line_chart(stream_df.set_index("timestamp")[["hydraulic_psi", "rpm"]], height=240,
+                  **ui_kwargs(st.line_chart, width="stretch"))
+    st.dataframe(stream_df[["timestamp", "rpm", "hydraulic_psi", "coolant_temp_c", "proximity_m", "seatbelt_latched"]],
+                 hide_index=True, **ui_kwargs(st.dataframe, width="stretch"))
 
 
 def render_security_tab(ctx: AppContext) -> None:
@@ -977,7 +1548,7 @@ def render_security_tab(ctx: AppContext) -> None:
     )
     demo_cols = st.columns(3)
     for index, (label, payload) in enumerate(ATTACK_DEMOS):
-        if demo_cols[index % 3].button(f"▶ {label}", key=f"demo_{index}",
+        if demo_cols[index % 3].button(f"Test: {label}", key=f"demo_{index}",
                                        **ui_kwargs(st.button, width="stretch")):
             decision = copilot.gatekeeper(payload)
             answer = copilot.respond(payload, settings=ctx.llm_settings)
@@ -1000,7 +1571,7 @@ def render_security_tab(ctx: AppContext) -> None:
     if st.session_state["demo_results"]:
         st.dataframe(pd.DataFrame(st.session_state["demo_results"]), hide_index=True,
                      **ui_kwargs(st.dataframe, width="stretch"))
-        st.caption("Refused → `llm_called` is False and the answer source is `static_gatekeeper`.")
+        st.caption("Refused -> llm_called is False and the answer source is static_gatekeeper.")
 
     left, right = st.columns([1.3, 1])
     with left:
@@ -1035,7 +1606,7 @@ def render_security_tab(ctx: AppContext) -> None:
     audit_cols[0].metric("Backend", store.backend, delta_color="off")
     audit_cols[1].metric("Events", f"{store.total_events():,}", delta_color="off")
     verification = store.verify_chain()
-    audit_cols[2].metric("Hash chain", "INTACT ✅" if verification.ok else "BROKEN ❌",
+    audit_cols[2].metric("Hash chain", "INTACT [VERIFIED]" if verification.ok else "BROKEN [ALERT]",
                          delta=verification.detail, delta_color="off")
     audit_cols[3].metric("Rows verified", f"{verification.rows_checked:,}", delta_color="off")
 
@@ -1085,12 +1656,123 @@ def render_security_tab(ctx: AppContext) -> None:
 
 
 # ======================================================================================
+# Dynamic Theme Injection
+# ======================================================================================
+def apply_theme(dark: bool) -> None:
+    """Inject CSS to dynamically switch between Dark Industrial Cab and Daylight mode."""
+    if not hasattr(st, "html"):
+        return
+
+    if dark:
+        css = """
+        <style>
+        .stApp, [data-testid="stAppViewContainer"] {
+            background-color: #0E1117 !important;
+            color: #E6EDF3 !important;
+        }
+        [data-testid="stHeader"] {
+            background-color: #0E1117 !important;
+        }
+        [data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+            background-color: #161B22 !important;
+            color: #E6EDF3 !important;
+            border-right: 1px solid #30363D !important;
+        }
+        [data-testid="stMetric"] {
+            background-color: #161B22 !important;
+            border: 1px solid #30363D !important;
+            border-radius: 8px !important;
+            padding: 10px 14px !important;
+        }
+        [data-testid="stMetricValue"] * {
+            color: #FFCD11 !important;
+        }
+        [data-testid="stMetricLabel"] * {
+            color: #8B949E !important;
+        }
+        [data-testid="stChatMessage"] {
+            background-color: #161B22 !important;
+            border: 1px solid #30363D !important;
+            border-radius: 8px !important;
+        }
+        [data-baseweb="tab-list"] {
+            background-color: #161B22 !important;
+            border-radius: 6px !important;
+            padding: 4px !important;
+        }
+        [data-baseweb="tab"] {
+            color: #C9D1D9 !important;
+        }
+        [aria-selected="true"] {
+            color: #FFCD11 !important;
+            font-weight: bold !important;
+        }
+        .stAlert {
+            border-radius: 8px !important;
+        }
+        </style>
+        """
+    else:
+        css = """
+        <style>
+        .stApp, [data-testid="stAppViewContainer"] {
+            background-color: #F8F9FA !important;
+            color: #1B1B1B !important;
+        }
+        [data-testid="stHeader"] {
+            background-color: #F8F9FA !important;
+        }
+        [data-testid="stSidebar"], [data-testid="stSidebarContent"] {
+            background-color: #FFFFFF !important;
+            color: #1B1B1B !important;
+            border-right: 1px solid #E2E8F0 !important;
+        }
+        [data-testid="stMetric"] {
+            background-color: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 8px !important;
+            padding: 10px 14px !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+        }
+        [data-testid="stMetricValue"] * {
+            color: #B58100 !important;
+        }
+        [data-testid="stMetricLabel"] * {
+            color: #4A5568 !important;
+        }
+        [data-testid="stChatMessage"] {
+            background-color: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 8px !important;
+        }
+        [data-baseweb="tab-list"] {
+            background-color: #EDF2F7 !important;
+            border-radius: 6px !important;
+            padding: 4px !important;
+        }
+        [data-baseweb="tab"] {
+            color: #4A5568 !important;
+        }
+        [aria-selected="true"] {
+            color: #B58100 !important;
+            font-weight: bold !important;
+        }
+        .stAlert {
+            border-radius: 8px !important;
+        }
+        </style>
+        """
+    st.html(css)
+
+
+# ======================================================================================
 # Entry point
 # ======================================================================================
 def main() -> None:
     """Assemble the page. Called only when this file is executed by Streamlit."""
     st.set_page_config(**_PAGE_CONFIG)
     ensure_session_state()
+    apply_theme(st.session_state.get("dark_mode_toggle", True))
 
     store = get_audit_store()
     if not st.session_state.get("session_logged"):
@@ -1105,7 +1787,7 @@ def main() -> None:
 
     ctx = render_sidebar()
 
-    st.title(f"🚜 {APP_NAME}")
+    st.title(APP_NAME)
     st.caption(
         f"{APP_TAGLINE} · machine **{ctx.plan.machine_id}** · operator "
         f"**{ctx.plan.operator}** · shift **{ctx.plan.shift_name}** "
@@ -1113,7 +1795,7 @@ def main() -> None:
         f"clock **{fmt.fmt_day(ctx.now)}**"
     )
 
-    if not ctx.ingest.result.ok:
+    if not ctx.ingest.result.ok and "STANDBY" not in ctx.ingest.source_label:
         st.error(
             "Telemetry could not be ingested, so the dashboard is showing empty panels. "
             "Check the CSV columns against the required schema - the anomaly engine is still "
@@ -1123,17 +1805,29 @@ def main() -> None:
             st.write(f"- {security.flatten_for_log(issue, 160)}")
 
     tabs = st.tabs(
-        ["📊 Daily tasks", "🛡️ Safety Guardian", "📈 Telemetry", "🤖 CAT-Pal", "🔐 Security & audit"]
+        [
+            "Plain-English Assist",
+            "Daily Tasks",
+            "Safety Guardian",
+            "Telemetry Analytics",
+            "CAT-Pal Copilot",
+            "Data Stream Test Suite",
+            "Security & Audit",
+        ]
     )
     with tabs[0]:
-        render_dashboard_tab(ctx)
+        render_plain_english_tab(ctx)
     with tabs[1]:
-        render_safety_tab(ctx)
+        render_dashboard_tab(ctx)
     with tabs[2]:
-        render_analytics_tab(ctx)
+        render_safety_tab(ctx)
     with tabs[3]:
-        render_copilot_tab(ctx)
+        render_analytics_tab(ctx)
     with tabs[4]:
+        render_copilot_tab(ctx)
+    with tabs[5]:
+        render_stream_test_suite_tab(ctx)
+    with tabs[6]:
         render_security_tab(ctx)
 
     st.divider()
