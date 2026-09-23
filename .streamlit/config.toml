@@ -8,11 +8,12 @@
 # =====================================================================================
 
 [theme]
-# Caterpillar-inspired palette: safety yellow accent on a neutral industrial surface.
+# Caterpillar-inspired palette: safety yellow accent on a dark industrial surface.
+base = "dark"
 primaryColor = "#FFCD11"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F5F7"
-textColor = "#1B1B1B"
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#262730"
+textColor = "#FAFAFA"
 font = "sans serif"
 
 [browser]
