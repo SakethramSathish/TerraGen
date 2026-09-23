@@ -1,4 +1,4 @@
-# 🚜 CAT Smart Operator Assistant
+# 🚜 TerraGen
 
 **A local-first, offline-capable operator assistant for heavy machinery edge environments.**
 
