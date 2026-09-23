@@ -1,0 +1,31 @@
+# =====================================================================================
+# Project configuration (pytest + tooling) for the CAT Smart Operator Assistant.
+# =====================================================================================
+
+[project]
+name = "cat-smart-operator-assistant"
+version = "1.0.0"
+description = "Local-first CAT heavy-machinery operator assistant: dashboard, safety guardian, telemetry analytics and a domain-scoped copilot."
+requires-python = ">=3.10"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+# Treat numeric warnings as errors: an all-NaN telemetry window must never silently
+# produce `nan` KPIs on the dashboard (see core/telemetry.py finite_value helpers).
+filterwarnings = [
+    "error::RuntimeWarning",
+    "ignore::DeprecationWarning:streamlit.*",
+    "ignore::DeprecationWarning:pandas.*",
+]
+markers = [
+    # The Streamlit AppTest integration tests are slower (a few seconds each); deselect
+    # them on a constrained edge box with: pytest -m "not integration"
+    "integration: end-to-end Streamlit application runs",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "data"]
+# B110 (try/except/pass) and B310 (urllib urlopen) are handled with documented,
+# line-scoped `# nosec` annotations in core/llm_gateway.py rather than project-wide skips.

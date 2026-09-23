@@ -1,0 +1,37 @@
+# =====================================================================================
+# Streamlit runtime configuration - CAT Smart Operator Assistant
+# -------------------------------------------------------------------------------------
+# Committed on purpose: an edge machine must be configured the same way every shift.
+#   * gatherUsageStats = false -> no telemetry is sent to Streamlit's servers (this machine
+#                                moves commercially sensitive tonnage data)
+#   * headless / address       -> reachable from the cab tablet on the machine LAN
+# =====================================================================================
+
+[theme]
+# Caterpillar-inspired palette: safety yellow accent on a neutral industrial surface.
+primaryColor = "#FFCD11"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F5F7"
+textColor = "#1B1B1B"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true
+address = "0.0.0.0"
+port = 8501
+# Telemetry uploads are processed in memory (5 MiB cap) and never persisted by the server.
+maxUploadSize = 5
+# NOTE for a production machine on a shared/plant LAN: tighten cross-origin access by
+# switching to Streamlit's restrictive defaults, e.g.
+#     enableCORS = true
+#     enableXsrfProtection = true
+#     allowedHosts = ["operator-pc.local:8501", "10.0.0.*"]
+# It is left permissive here so the same file also serves the single-operator demo/dev host.
+enableCORS = false
+
+[client]
+showErrorDetails = true
+toolbarMode = "minimal"

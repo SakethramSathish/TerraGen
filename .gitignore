@@ -1,0 +1,66 @@
+# =====================================================================================
+# CAT Smart Operator Assistant - ignore rules
+# =====================================================================================
+
+# --- secrets and credentials (NEVER commit these) ------------------------------------
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+!*.example
+*.pem
+*.key
+
+# --- local runtime data --------------------------------------------------------------
+data/*.sqlite3
+data/*.sqlite3-wal
+data/*.sqlite3-shm
+data/*.jsonl
+data/operator_assistant*
+
+# --- python ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# --- editors / OS ---------------------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- logs and databases ---------------------------------------------------------------
+*.log
+*.sqlite
+*.db
+
+# --- python build / packaging ---------------------------------------------------------
+build/
+dist/
+*.egg
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.manifest
+*.spec
+
+# --- jupyter notebooks ----------------------------------------------------------------
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# --- note -----------------------------------------------------------------------------
+# data/sample_telemetry.csv IS committed: it is the deterministic demo fixture used by the
+# "Bundled sample CSV" source and by tests/test_telemetry.py.
+# Regenerate it any time with:  python scripts/generate_sample_data.py

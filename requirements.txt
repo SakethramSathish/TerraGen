@@ -1,0 +1,35 @@
+# =====================================================================================
+# CAT Smart Operator Assistant - runtime dependencies
+# -------------------------------------------------------------------------------------
+# Deliberately tiny: this must install and run on an edge node (or a laptop in a cab) with
+# no internet at run time and no external database. Everything below is pure-Python or
+# ships manylinux wheels for CPython 3.10+.
+#
+#   python -m venv .venv && . .venv/bin/activate
+#   pip install -r requirements.txt
+#   streamlit run app.py
+# =====================================================================================
+
+# --- UI / application framework (the entire front-end is Streamlit) ------------------
+streamlit>=1.36,<2.0
+
+# --- Data handling (telemetry ingest, anomaly math, KPI frames) ----------------------
+pandas>=2.0,<3.0
+numpy>=1.24,<3.0
+
+# --- Optional: load a local .env for the opt-in remote-LLM mode ---------------------
+#     (the app runs fine without it - secrets can come from st.secrets or the environment)
+python-dotenv>=1.0,<2.0
+
+# --- Testing / QA (used by tests/ and scripts/run_qa.sh) ----------------------------
+pytest>=8.0,<10.0
+
+# --- Static Application Security Testing (SAST) -------------------------------------
+bandit>=1.7,<2.0
+
+# -------------------------------------------------------------------------------------
+# NOTE: SQLite needs no driver - it is part of the Python standard library (sqlite3).
+# NOTE: remote LLM calls use urllib from the standard library, so no `requests`/`openai`
+#       dependency is required (and no outbound socket is opened unless you opt in via
+#       CAT_COPILOT_MODE=remote).
+# -------------------------------------------------------------------------------------
